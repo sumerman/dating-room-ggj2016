@@ -25,6 +25,11 @@ defmodule DatingRoom.WebsocketHandler do
 
   def websocket_handle(_data, req, state), do: {:ok, req, state}
 
+  def websocket_info({:message, {:joined, room}}, req, state) do
+    users = :pg2.get_members({:room, room}) |> Enum.map(&inspect/1)
+    reply = %{type: "joined", users: users} |> Poison.encode!
+    {:reply, {state.frametype, reply}, req, state}
+  end
   def websocket_info({:message, bin}, req, state),
    do: {:reply, {state.frametype, bin}, req, state}
   def websocket_info(_info, req, state), do: {:ok, req, state}
@@ -35,18 +40,22 @@ defmodule DatingRoom.WebsocketHandler do
       {:error, _} -> :pg2.create({:room, room})
     end
     :ok = :pg2.join({:room, room}, self)
-    others = :pg2.get_members({:room, room}) |> List.filter(&(&1 != self)) |> List.map(&inspect/1)
-    {:reply, %{type: "joined", room: room, user_id: inspect(self), others: others}, state}
+    send_all({:joined, room}, room)
+    {:ok, state}
   end
   defp handle_message(%{"type" => "send", "room" => room, "payload" => payload}, state) do
     msg_id = :erlang.unique_integer([:positive, :monotonic])
-    msg_bin = %{type: "message", room: room, payload: payload,
-                id: msg_id, user_id: inspect(self)}
-              |> Poison.encode!
-    for pid <- :pg2.get_members({:room, room}), do: send(pid, {:message, msg_bin})
+    %{type: "message", room: room, payload: payload,
+      id: msg_id, user_id: inspect(self)}
+      |> Poison.encode!
+      |> send_all(room)
     {:ok, state}
   end
   defp handle_message(msg, state),
    do: {:reply, %{type: "error", reason: "uknown msg", payload: msg}, state}
+
+  defp send_all(msg_bin, room) do
+    for pid <- :pg2.get_members({:room, room}), do: send(pid, {:message, msg_bin})
+  end
 
 end
