@@ -2,6 +2,7 @@ defmodule DatingRoom do
   def start(_type, _args) do
     dispatch = :cowboy_router.compile([{:_, routes}])
     {:ok, _} = :cowboy.start_http(:http, 100, [port: port], [env: [dispatch: dispatch]])
+    DatingRoom.Supervisor.start_link
   end
 
   def port do

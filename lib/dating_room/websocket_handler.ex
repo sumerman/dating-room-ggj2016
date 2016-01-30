@@ -51,6 +51,7 @@ defmodule DatingRoom.WebsocketHandler do
       |> send_all(room)
     {:ok, state}
   end
+  # TODO handle broker down
   defp handle_message(msg, state),
    do: {:reply, %{type: "error", reason: "uknown msg", payload: msg}, state}
 
