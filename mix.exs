@@ -20,7 +20,8 @@ defmodule DatingRoom.Mixfile do
   defp deps do
     [
       {:cowboy, "1.0.4"},
-      {:poison, "~> 2.0"}
+      {:poison, "~> 2.0"},
+      {:exredis, ">= 0.2.2"}
     ]
   end
 end

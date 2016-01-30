@@ -35,7 +35,8 @@ defmodule DatingRoom.WebsocketHandler do
       {:error, _} -> :pg2.create({:room, room})
     end
     :ok = :pg2.join({:room, room}, self)
-    {:reply, %{type: "joined", room: room, user_id: inspect(self)}, state}
+    others = :pg2.get_members({:room, room}) |> List.filter(&(&1 != self)) |> List.map(&inspect/1)
+    {:reply, %{type: "joined", room: room, user_id: inspect(self), others: others}, state}
   end
   defp handle_message(%{"type" => "send", "room" => room, "payload" => payload}, state) do
     msg_id = :erlang.unique_integer([:positive, :monotonic])
