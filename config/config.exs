@@ -29,4 +29,4 @@ use Mix.Config
 #
 #     import_config "#{Mix.env}.exs"
 
-config :dating_room, http_port: 8090
+config :dating_room, http_port: System.get_env("PORT") || 8090
