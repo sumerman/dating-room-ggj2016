@@ -43,8 +43,7 @@ defmodule DatingRoom.WebsocketHandler do
     msg_bin = %{type: "message", room: room, payload: payload,
                 id: msg_id, user_id: inspect(self)}
               |> Poison.encode!
-    for pid <- :pg2.get_members({:room, room}), pid != self,
-      do: send(pid, {:message, msg_bin})
+    for pid <- :pg2.get_members({:room, room}), do: send(pid, {:message, msg_bin})
     {:ok, state}
   end
   defp handle_message(msg, state),

@@ -1,5 +1,5 @@
 defmodule Broker do
-  import Record
+  require Record
   use GenServer
 
   def send(client, room, message) do
@@ -12,6 +12,9 @@ defmodule Broker do
     ]
     Exredis.query_pipe(client, cmds)
   end
+
+  def start_redis_client,
+   do: Exredis.start_using_connection_string(redis_uri, reconnect_sleep)
 
   Record.defrecord :subscribtion, [:channel, :pid]
 
@@ -31,5 +34,7 @@ defmodule Broker do
   defp psub_name(room), do: "room{#{room}}psub"
   defp hist_length, do: 100
   defp hist_expire, do: 1800
+  defp reconnect_sleep, do: 1000
+  defp redis_uri, do: Application.get_env(:dating_room, :redis_uri, "")
 
 end
