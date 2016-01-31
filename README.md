@@ -4,4 +4,4 @@ This repo contains primitive server for a turn-based dating card game created fo
 
 Unity client repo is here: https://github.com/dom-bo/ggj16_dating
 
-Game itself is here: https://dating-room-ggj2016.herokuapp.com/
+Game itself is here: http://dating-room-ggj2016.herokuapp.com/
