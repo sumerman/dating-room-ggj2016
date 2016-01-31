@@ -5,7 +5,7 @@ defmodule DatingRoom.WebsocketHandler do
   alias DatingRoom.Broker.Message
 
   defmodule State do
-    defstruct frametype: :binary, user_id: "", subscription: nil
+    defstruct frametype: :binary, user_id: "", subscription: nil, users_seen: []
   end
 
   def init({_tcp, _http}, _req, _opts),
@@ -28,8 +28,21 @@ defmodule DatingRoom.WebsocketHandler do
 
   def websocket_handle(_data, req, state), do: {:ok, req, state}
 
-  def websocket_info(%Message{payload: bin}, req, state),
-   do: {:reply, {state.frametype, bin}, req, state}
+  def websocket_info(%Message{payload: bin}, req, %{user_id: user_id} = state) do
+    case Poison.decode!(bin) do
+      %{"type" => "joined", "user_id" => uid} ->
+        if uid in state.users_seen do
+          {:ok, req, state}
+        else
+          state = %{state | users_seen: [user_id | state.users_seen]}
+          {:reply, {state.frametype, bin}, req, state}
+        end
+      %{"user_id" => uid} when uid == user_id ->
+        {:ok, req, state}
+      _ ->
+        {:reply, {state.frametype, bin}, req, state}
+    end
+  end
   # broker down
   def websocket_info({:DOWN, _ref, :process, pid, _reason}, req, state),
    do: {:shutdown, req, state}
@@ -38,6 +51,12 @@ defmodule DatingRoom.WebsocketHandler do
   defp handle_message(%{"type" => "join", "room" => room, "user_id" => user_id} = msg, state) do
     if state.subscription, do: Broker.unsubscribe(state.subscription)
     last_id = Map.get(msg, "last_id", 0)
+    seen = if last_id > 0 do
+      state.users_seen
+    else
+      []
+    end
+    state = %{state | users_seen: seen}
     case Broker.subscribe(room, last_id) do
       {:error, _} = err ->
         {:reply, %{type: "error", reason: "#{inspect err}"}, state}
@@ -48,8 +67,8 @@ defmodule DatingRoom.WebsocketHandler do
   end
 
   defp handle_message(%{"type" => "send", "room" => room, "payload" => payload}, state) do
-    send_to! room, %{type: "message", payload: payload, user_id: state.user_id}
-    {:ok, state}
+    {:ok, id} = send_to! room, %{type: "message", payload: payload, user_id: state.user_id}
+    {:reply, %{type: "sent", id: id}, state}
   end
   defp handle_message(msg, state),
    do: {:reply, %{type: "error", reason: "uknown msg", payload: msg}, state}

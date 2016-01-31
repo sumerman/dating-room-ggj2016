@@ -86,7 +86,7 @@ defmodule DatingRoom.Broker do
     payload = f.(msg_id)
     msg = Message.to_redis(%Message{id: msg_id, room: room, payload: payload})
     Redis.send(redis, room, msg)
-    :ok
+    {:ok, msg_id}
   end
 
   def subscribe(room, last_seen \\ -1, proc \\ nil)
@@ -119,7 +119,14 @@ defmodule DatingRoom.Broker do
                  }}
   end
 
-  defp rejoin(_room, last_seen, _pid, _state) when last_seen <= 0, do: :ok
+  defp rejoin(_room, last_seen, _pid, _state) when last_seen == 0, do: :ok
+  defp rejoin(room, last_seen, pid, state) when last_seen < 0 do
+    Redis.raw_history(state.redis_client, room)
+    |> Enum.map(&(Message.from_redis!(&1, room)))
+    |> Enum.reverse
+    |> Enum.take(last_seen)
+    |> Enum.each(&(send(pid, &1)))
+  end
   defp rejoin(room, last_seen, pid, state) do
     missed = Redis.raw_history(state.redis_client, room)
     |> Enum.map(&(Message.from_redis!(&1, room)))
