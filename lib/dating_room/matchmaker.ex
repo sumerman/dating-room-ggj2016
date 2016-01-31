@@ -9,12 +9,15 @@ defmodule DatingRoom.Matchmaker do
   def start_link(opts \\ []),
    do: GenServer.start_link(__MODULE__, [], [name: __MODULE__] ++ opts)
 
-  def join() do
-    GenServer.cast(__MODULE__, {:join, self})
-  end
+  def join(), do: GenServer.cast(__MODULE__, {:join, self})
+  def queue_length(), do: GenServer.call(__MODULE__, :queue_length)
 
   def init([]) do
     {:ok, []}
+  end
+
+  def handle_call(:queue_length, from, state) do
+    {:reply, Enum.filter(state, &Process.alive?/1) |> length, state}
   end
 
   def handle_cast({:join, pid}, state) do
