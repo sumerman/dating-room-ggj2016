@@ -27,7 +27,7 @@ defmodule DatingRoom.EchoBot do
 
   def handle_info(%Broker.Message{payload: bin, room: room}, %{user_id: user_id} = state) do
     case Poison.decode!(bin) do
-      %{"type" => "joined", "user_id" => uid} ->
+      %{"type" => "joined"} ->
         {:noreply, state}
       %{"user_id" => uid} when uid == user_id ->
         {:noreply, state}

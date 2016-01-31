@@ -18,7 +18,7 @@ defmodule DatingRoom.Matchmaker do
 
   def init([]), do: {:ok, []}
 
-  def handle_call(:queue_length, from, state) do
+  def handle_call(:queue_length, _from, state) do
     {:reply, Enum.filter(state, &Process.alive?/1) |> length, state}
   end
 
