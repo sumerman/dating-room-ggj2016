@@ -5,14 +5,15 @@ defmodule DatingRoom.WebsocketHandler do
   alias DatingRoom.Broker.Message
 
   defmodule State do
-    defstruct frametype: :binary, user_id: "", subscription: nil, users_seen: []
+    defstruct frametype: :binary, user_id: "", subscription: nil,
+              users_seen: [], timer: nil
   end
 
   def init({_tcp, _http}, _req, _opts),
    do: {:upgrade, :protocol, :cowboy_websocket}
 
   def websocket_init(_TransportName, req, _opts),
-   do: {:ok, req, %State{}}
+   do: {:ok, req, reset_timer(%State{})}
 
   def websocket_terminate(_reason, _req, _state), do: :ok
 
@@ -29,12 +30,13 @@ defmodule DatingRoom.WebsocketHandler do
   def websocket_handle(_data, req, state), do: {:ok, req, state}
 
   def websocket_info(%Message{payload: bin}, req, %{user_id: user_id} = state) do
+    state = reset_timer(state)
     case Poison.decode!(bin) do
       %{"type" => "joined", "user_id" => uid} ->
         if uid in state.users_seen do
           {:ok, req, state}
         else
-          state = %{state | users_seen: [user_id | state.users_seen]}
+          state = %{state | users_seen: [uid | state.users_seen]}
           {:reply, {state.frametype, bin}, req, state}
         end
       %{"user_id" => uid} when uid == user_id ->
@@ -43,6 +45,9 @@ defmodule DatingRoom.WebsocketHandler do
         {:reply, {state.frametype, bin}, req, state}
     end
   end
+  # idle
+  def websocket_info(:idle_timeout, req, state),
+   do: {:shutdown, req, state}
   # broker down
   def websocket_info({:DOWN, _ref, :process, pid, _reason}, req, state),
    do: {:shutdown, req, state}
@@ -70,6 +75,8 @@ defmodule DatingRoom.WebsocketHandler do
     {:ok, id} = send_to! room, %{type: "message", payload: payload, user_id: state.user_id}
     {:reply, %{type: "sent", id: id}, state}
   end
+  defp handle_message(%{"type" => "ping"}, state),
+   do: {:reply, %{type: "pong"}, state}
   defp handle_message(msg, state),
    do: {:reply, %{type: "error", reason: "uknown msg", payload: msg}, state}
 
@@ -81,4 +88,12 @@ defmodule DatingRoom.WebsocketHandler do
       |> Poison.encode!
     end
   end
+
+  # idle room timer
+  defp reset_timer(state) do
+    if state.timer, do: Process.cancel_timer(state.timer)
+    timer = Process.send_after(self, :idle_timeout, 60_000)
+    %{state | timer: timer}
+  end
+
 end

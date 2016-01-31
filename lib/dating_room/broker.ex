@@ -58,7 +58,7 @@ defmodule DatingRoom.Broker do
   end
 
   defmodule State do
-    defstruct [:subscribtions, :subscribers,
+    defstruct [:subscriptions, :subscribers,
                :redis_client, :redis_sub_client]
   end
 
@@ -107,13 +107,13 @@ defmodule DatingRoom.Broker do
   end
 
   def init([]) do
-    subscribtions    = :ets.new(:broker_subscribtions, [:bag])
+    subscriptions    = :ets.new(:broker_subscriptions, [:bag])
     subscribers      = :ets.new(:broker_subscribers, [:bag])
     redis_client     = Redis.start_client
     redis_sub_client = Redis.start_subscription_client(self)
     Process.register(redis_client, :broker_redis_client)
     {:ok, %State{subscribers: subscribers,
-                 subscribtions: subscribtions,
+                 subscriptions: subscriptions,
                  redis_client: redis_client,
                  redis_sub_client: redis_sub_client
                  }}
@@ -148,7 +148,7 @@ defmodule DatingRoom.Broker do
       :ok ->
         unless :ets.member(state.subscribers, pid), do: Process.monitor(pid)
         :ets.insert(state.subscribers,   {pid, room})
-        :ets.insert(state.subscribtions, {room, pid})
+        :ets.insert(state.subscriptions, {room, pid})
         {:reply, :ok, state}
       end
   end
@@ -162,7 +162,7 @@ defmodule DatingRoom.Broker do
   def handle_info({:pmessage, "room*", psub_room_name, data, _pid}, state) do
     room = Redis.name_from_psub(psub_room_name)
     msg = data |> Message.from_redis!(room)
-    for {_room, pid} <- :ets.lookup(state.subscribtions, room), do: send(pid, msg)
+    for {_room, pid} <- :ets.lookup(state.subscriptions, room), do: send(pid, msg)
     {:noreply, state}
   end
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
