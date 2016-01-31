@@ -9,9 +9,9 @@ defmodule DatingRoom.Matchmaker do
   def start_link(opts \\ []),
    do: GenServer.start_link(__MODULE__, [], [name: __MODULE__] ++ opts)
 
-  def join(), do: GenServer.cast(__MODULE__, {:join, self})
+  def join(), do: GenServer.call(__MODULE__, {:join, self})
   def leave() do
-    GenServer.cast(__MODULE__, {:leave, self})
+    GenServer.call(__MODULE__, {:leave, self})
     flush_matches
   end
   def queue_length(), do: GenServer.call(__MODULE__, :queue_length)
@@ -22,14 +22,16 @@ defmodule DatingRoom.Matchmaker do
     {:reply, Enum.filter(state, &Process.alive?/1) |> length, state}
   end
 
-  def handle_cast({:join, pid}, state) do
+  def handle_call({:join, pid}, from, state) do
+    GenServer.reply(from, :ok)
+
     state = [pid | state]
     |> Enum.filter(&Process.alive?/1)
     |> make_match
     {:noreply, state}
   end
 
-  def handle_call({:leave, pid}, state) do
+  def handle_call({:leave, pid}, _from, state) do
     state = Enum.filter(state, &(&1 != pid))
     {:reply, :ok, state}
   end

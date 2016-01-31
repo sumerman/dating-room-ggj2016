@@ -7,7 +7,7 @@ defmodule DatingRoom.WebsocketHandler do
 
   defmodule State do
     defstruct frametype: :binary, user_id: "", room: "", subscription: nil,
-              users_seen: [], timer: nil, waiting_for_match: false
+              users_seen: [], timer: nil, waiting_for_match: false, bot: nil
   end
 
   def init({_tcp, _http}, _req, _opts),
@@ -53,6 +53,20 @@ defmodule DatingRoom.WebsocketHandler do
 
   defp handle_message(%{"type" => "ping"}, state),
    do: {:reply, %{type: "pong"}, state}
+  defp handle_message(%{"type" => "stop_match"}, state) do
+    Matchmaker.leave
+    if is_pid(state.pid) do
+      unlink(state.pid)
+      exit(state.pid, :kill)
+    end
+    {:ok, state} = join(room, state.user_id, 0, %{state | waiting_for_match: false})
+    {:ok, bot_pid} = DatingRoom.EchoBot.start_link(user_id <> "_bot", room)
+    {:ok, req, %{state | bot: bot_pid}}
+  end
+  defp handle_message(%{"type" => "start_bot"}, state) do
+    Matchmaker.leave
+    {:ok, %{state | waiting_for_match: false}}
+  end
   defp handle_message(_msg, %State{waiting_for_match: true} = state),
    do: {:reply, %{type: "waiting_for_match"}, state}
   defp handle_message(%{"type" => "join", "room" => room, "user_id" => user_id} = msg, state) do
@@ -61,7 +75,7 @@ defmodule DatingRoom.WebsocketHandler do
   end
   defp handle_message(%{"type" => "match", "user_id" => user_id}, state) do
     if state.subscription, do: Broker.unsubscribe(state.subscription)
-    Matchmaker.join
+    :ok = Matchmaker.join
     {:reply, %{type: "waiting_for_match"}, %{state | user_id: user_id, waiting_for_match: true}}
   end
   defp handle_message(%{"type" => "send", "payload" => payload} = msg, state) do
