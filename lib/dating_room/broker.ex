@@ -20,14 +20,19 @@ defmodule DatingRoom.Broker do
       key = oset_name(room)
       cmds = [
         ["ZADD", key, "NX", Integer.to_string(id), message],
-        ["ZREMRANGEBYRANK", key, 0 -(hist_length - 1)],
+        ["ZREMRANGEBYRANK", key, 0, -(hist_length + 2)],
         ["EXPIRE", key, hist_expire],
         ["PUBLISH", psub_name(room), message]
       ]
-      case Exredis.query_pipe(client, cmds) do
-        [_idx, "OK", "1", _receivers_cnt] -> :ok
-        [_idx, trim, expire, publish] ->
-           {:error, trim: trim, expire: expire, publish: publish}
+
+      res = Exredis.query_pipe(client, cmds)
+      try do
+        ["1", trim_cnt, "1", receivers_cnt] = res
+        _ = String.to_integer(trim_cnt)
+        _ = String.to_integer(receivers_cnt)
+        :ok
+      rescue _ ->
+        {:error, res}
       end
     end
 
@@ -88,7 +93,7 @@ defmodule DatingRoom.Broker do
     msg_id = Redis.incr!(redis, room)
     payload = f.(msg_id)
     msg = Message.to_redis(%Message{id: msg_id, room: room, payload: payload})
-    Redis.send(redis, room, msg_id, msg)
+    :ok = Redis.send(redis, room, msg_id, msg)
     {:ok, msg_id}
   end
 
@@ -97,7 +102,7 @@ defmodule DatingRoom.Broker do
     case rejoin(room, last_seen, self) do
       {:error, _} = err -> err
       :ok ->
-        :ok = GenServer.call(__MODULE__, {:subscribe, room, last_seen, self})
+        :ok = GenServer.call(__MODULE__, {:subscribe, room, self})
         bref = Process.monitor(__MODULE__)
         {:ok, {room, bref}}
     end
@@ -122,7 +127,7 @@ defmodule DatingRoom.Broker do
                  }}
   end
 
-  def handle_call({:subscribe, room, last_seen, pid}, _from, state) do
+  def handle_call({:subscribe, room, pid}, _from, state) do
     unless :ets.member(state.subscribers, pid), do: Process.monitor(pid)
     :ets.insert(state.subscribers,   {pid, room})
     :ets.insert(state.subscriptions, {room, pid})
