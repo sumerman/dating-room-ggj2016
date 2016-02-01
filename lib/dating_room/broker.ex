@@ -16,12 +16,12 @@ defmodule DatingRoom.Broker do
       end
     end
 
-    def send(client, room, message) do
-      key = list_name(room)
+    def send(client, room, id, message) do
+      key = oset_name(room)
       cmds = [
-        ["LPUSH",   key, message],
-        ["LTRIM",   key, 0, hist_length - 1],
-        ["EXPIRE",  key, hist_expire],
+        ["ZADD", key, "NX", Integer.to_string(id), message],
+        ["ZREMRANGEBYRANK", key, 0 -(hist_length - 1)],
+        ["EXPIRE", key, hist_expire],
         ["PUBLISH", psub_name(room), message]
       ]
       case Exredis.query_pipe(client, cmds) do
@@ -31,8 +31,11 @@ defmodule DatingRoom.Broker do
       end
     end
 
-    def raw_history(client, room),
-     do: lrange(client, list_name(room), 0, -1) #|> Enum.reverse
+    def raw_history(client, room, since \\ 0)
+    def raw_history(client, room, since) when since < 0,
+     do: zrange(client, oset_name(room), since, -1)
+    def raw_history(client, room, since) when since >= 0,
+     do: zrangebyscore(client, oset_name(room), since, "+inf")
 
     def start_client,
      do: Exredis.start_using_connection_string(redis_uri)
@@ -45,7 +48,7 @@ defmodule DatingRoom.Broker do
     end
 
     def  psub_name(room), do: "room{#{room}}"
-    defp list_name(room), do: "room{#{room}}list"
+    defp oset_name(room), do: "room{#{room}}oset"
     defp counter_name(room), do: "room{#{room}}counter"
 
     defp hist_length, do: 100
@@ -85,23 +88,23 @@ defmodule DatingRoom.Broker do
     msg_id = Redis.incr!(redis, room)
     payload = f.(msg_id)
     msg = Message.to_redis(%Message{id: msg_id, room: room, payload: payload})
-    Redis.send(redis, room, msg)
+    Redis.send(redis, room, msg_id, msg)
     {:ok, msg_id}
   end
 
-  def subscribe(room, last_seen \\ -1, proc \\ nil)
-  def subscribe(room, last_seen, nil), do: subscribe(room, last_seen, self)
-  def subscribe(room, last_seen, pid) when is_pid(pid) do
-    case GenServer.call(__MODULE__, {:subscribe, room, last_seen, pid}) do
-      {:error, _} = err -> err;
+  def subscribe(room, last_seen \\ 0)
+  def subscribe(room, last_seen) do
+    case rejoin(room, last_seen, self) do
+      {:error, _} = err -> err
       :ok ->
+        :ok = GenServer.call(__MODULE__, {:subscribe, room, last_seen, self})
         bref = Process.monitor(__MODULE__)
-        {:ok, {room, pid, bref}}
+        {:ok, {room, bref}}
     end
   end
 
-  def unsubscribe({room, spid, bref}) when is_pid(spid) do
-    GenServer.call(__MODULE__, {:unsubscribe, room, spid})
+  def unsubscribe({room, bref}) do
+    GenServer.call(__MODULE__, {:unsubscribe, room, self})
     Process.demonitor(bref, [:flush])
     :ok
   end
@@ -119,38 +122,11 @@ defmodule DatingRoom.Broker do
                  }}
   end
 
-  defp rejoin(_room, last_seen, _pid, _state) when last_seen == 0, do: :ok
-  defp rejoin(room, last_seen, pid, state) when last_seen < 0 do
-    Redis.raw_history(state.redis_client, room)
-    |> Enum.map(&(Message.from_redis!(&1, room)))
-    |> Enum.reverse
-    |> Enum.take(last_seen)
-    |> Enum.each(&(send(pid, &1)))
-  end
-  defp rejoin(room, last_seen, pid, state) do
-    missed = Redis.raw_history(state.redis_client, room)
-    |> Enum.map(&(Message.from_redis!(&1, room)))
-    |> Enum.take_while(&(&1.id >= last_seen))
-    |> Enum.reverse
-
-    case missed do
-      [%Message{id: id} | rest] when id == last_seen ->
-        Enum.each(rest, &(send(pid, &1)))
-        :ok
-      _ -> {:error, :missed_to_much}
-    end
-  end
-
   def handle_call({:subscribe, room, last_seen, pid}, _from, state) do
-    case rejoin(room, last_seen, pid, state) do
-      {:error, _} = err ->
-        {:reply, err, state}
-      :ok ->
-        unless :ets.member(state.subscribers, pid), do: Process.monitor(pid)
-        :ets.insert(state.subscribers,   {pid, room})
-        :ets.insert(state.subscriptions, {room, pid})
-        {:reply, :ok, state}
-      end
+    unless :ets.member(state.subscribers, pid), do: Process.monitor(pid)
+    :ets.insert(state.subscribers,   {pid, room})
+    :ets.insert(state.subscriptions, {room, pid})
+    {:reply, :ok, state}
   end
 
   def handle_call({:unsubscribe, room, pid}, _from, state) do
@@ -175,6 +151,23 @@ defmodule DatingRoom.Broker do
   def handle_info(info, state) do
     Logger.warn "uknown info #{inspect info}"
     {:noreply, state}
+  end
+
+  defp rejoin(_room, last_seen, _pid) when last_seen == 0, do: :ok
+  defp rejoin(room, last_seen, pid) do
+    missed = Process.whereis(:broker_redis_client)
+    |> Redis.raw_history(room, last_seen)
+    |> Enum.map(&(Message.from_redis!(&1, room)))
+
+    case missed do
+      [%Message{id: id} | _] when id != last_seen and last_seen > 0 ->
+        {:error, :missed_to_much}
+      all ->
+        all
+        |> Enum.drop_while(&(&1.id <= last_seen))
+        |> Enum.each(&(send(pid, &1)))
+        :ok
+    end
   end
 
 end
