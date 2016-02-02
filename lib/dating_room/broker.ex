@@ -21,13 +21,15 @@ defmodule DatingRoom.Broker do
       cmds = [
         ["ZADD", key, "NX", Integer.to_string(id), message],
         ["ZREMRANGEBYRANK", key, 0, -(hist_length + 2)],
-        ["EXPIRE", key, hist_expire]
+        ["EXPIRE", key, hist_expire],
+        ["PUBLISH", psub_name(room), id]
       ]
 
       res = Exredis.query_pipe(client, cmds)
       try do
-        ["1", trim_cnt, "1"] = res
+        ["1", trim_cnt, "1", pub_cnt] = res
         _ = String.to_integer(trim_cnt)
+        _ = String.to_integer(pub_cnt)
         :ok
       rescue _ ->
         {:error, res}
@@ -92,8 +94,6 @@ defmodule DatingRoom.Broker do
     payload = f.(msg_id)
     msg = Message.to_redis(%Message{id: msg_id, room: room, payload: payload})
     :ok = Redis.send(redis, room, msg_id, msg)
-    # should be rate-limited by previous synchronous call to redis
-    GenServer.cast(__MODULE__, {:fetch, room, msg_id})
     {:ok, msg_id}
   end
 
@@ -145,28 +145,23 @@ defmodule DatingRoom.Broker do
     {:reply, :ok, state}
   end
 
-  def handle_cast({:fetch, room, msg_id}, state) do
-      if :ets.member(state.observed, room) do
-          last_id = :ets.lookup_element(state.observed, room, 2)
-          if last_id < msg_id and last_id >= 0 do
-              last_id = state.redis_client
-              |> Redis.raw_history(room, last_id + 1)
-              |> Enum.map(&(Message.from_redis!(&1, room)))
-              |> Enum.reduce(last_id, fn msg, _ -> send_to_subscribers(room, msg, state); msg.id end)
+  def handle_info({:subscribed, "room*", _pid}, state), do: {:noreply, state}
+  def handle_info({:pmessage, "room*", psub_room_name, data, _pid}, state) do
+    room = Redis.name_from_psub(psub_room_name)
+    msg_id = String.to_integer(data)
+    if :ets.member(state.observed, room) do
+      last_id = :ets.lookup_element(state.observed, room, 2)
+      if last_id < msg_id and last_id >= 0 do
+        last_id = state.redis_client
+        |> Redis.raw_history(room, last_id + 1)
+        |> Enum.map(&(Message.from_redis!(&1, room)))
+        |> Enum.reduce(last_id, fn msg, _ -> send_to_subscribers(room, msg, state); msg.id end)
 
-              :ets.insert(state.observed, {room, last_id})
-          end
+        :ets.insert(state.observed, {room, last_id})
       end
-      {:noreply, state}
+    end
+    {:noreply, state}
   end
-
-  # def handle_info({:subscribed, "room*", _pid}, state), do: {:noreply, state}
-  # def handle_info({:pmessage, "room*", psub_room_name, data, _pid}, state) do
-  #   room = Redis.name_from_psub(psub_room_name)
-  #   msg = data |> Message.from_redis!(room)
-  #   send_to_subscribers(room, msg, state)
-  #   {:noreply, state}
-  # end
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
     for {pid, room} <- :ets.lookup(state.subscribers, pid) do
       :ets.delete(state.subscribers,   {pid, room})
