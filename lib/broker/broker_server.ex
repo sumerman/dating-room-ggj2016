@@ -1,95 +1,18 @@
-defmodule DatingRoom.Broker do
+defmodule Broker.Server do
   require Logger
   use GenServer
 
-  defmodule Redis do
-    import Exredis.Api
-
-    def incr!(client, room) do
-      key = counter_name(room)
-      cmds = [
-        ["INCR",   key],
-        ["EXPIRE", key, hist_expire * 2],
-      ]
-      case Exredis.query_pipe(client, cmds) do
-        [id, "1"] -> String.to_integer(id)
-      end
-    end
-
-    def send(client, room, id, message) do
-      key = oset_name(room)
-      cmds = [
-        ["ZADD", key, "NX", Integer.to_string(id), message],
-        ["ZREMRANGEBYRANK", key, 0, -(hist_length + 2)],
-        ["EXPIRE", key, hist_expire],
-        ["PUBLISH", psub_name(room), id]
-      ]
-
-      res = Exredis.query_pipe(client, cmds)
-      try do
-        ["1", trim_cnt, "1", pub_cnt] = res
-        _ = String.to_integer(trim_cnt)
-        _ = String.to_integer(pub_cnt)
-        :ok
-      rescue _ ->
-        {:error, res}
-      end
-    end
-
-    def raw_history(client, room, since \\ 0)
-    def raw_history(client, room, since) when since < 0,
-     do: zrange(client, oset_name(room), since, -1)
-    def raw_history(client, room, since) when since >= 0,
-     do: zrangebyscore(client, oset_name(room), since, "+inf")
-
-    def start_client,
-     do: Exredis.start_using_connection_string(redis_uri)
-
-    def start_subscription_client(pid) do
-      client_sub = Exredis.Sub.start_using_connection_string(redis_uri)
-      Exredis.Sub.psubscribe client_sub, "room*", fn(msg) ->
-        send(pid, msg)
-      end
-    end
-
-    def  psub_name(room), do: "room{#{room}}"
-    defp oset_name(room), do: "room{#{room}}oset"
-    defp counter_name(room), do: "room{#{room}}counter"
-
-    defp hist_length, do: 100
-    defp hist_expire, do: 1800
-    def  redis_uri, do: Application.get_env(:dating_room, :redis_uri, "")
-
-    def  name_from_psub("room{" <> room_suffix),
-     do: String.rstrip(room_suffix, ?})
-    def  name_from_psub(_), do: raise ArgumentError
-  end
+  alias Broker.Message
 
   defmodule State do
     defstruct [:subscriptions, :subscribers, :observed,
                :redis_client, :redis_sub_client]
   end
 
-  defmodule Message do
-    defstruct id: 0, payload: "", room: ""
-
-    def to_redis(%Message{id: id, payload: payload}) when is_integer(id),
-     do: "#{id}@#{payload}"
-
-    def from_redis!(data, room) do
-      case String.split(data, "@", parts: 2) do
-        [id, payload] ->
-          %Message{id: String.to_integer(id), payload: payload, room: room}
-        _ -> raise ArgumentError
-      end
-    end
-  end
-
   def start_link(opts \\ []),
-   do: GenServer.start_link(__MODULE__, [], [name: __MODULE__] ++ opts)
+   do: GenServer.start_link(__MODULE__, opts, opts)
 
-  def send_to!(room, f) do
-    redis = Process.whereis(:broker_redis_client)
+  def send_to!(redis, room, f) do
     msg_id = Redis.incr!(redis, room)
     payload = f.(msg_id)
     msg = Message.to_redis(%Message{id: msg_id, room: room, payload: payload})
@@ -97,28 +20,29 @@ defmodule DatingRoom.Broker do
     {:ok, msg_id}
   end
 
-  def subscribe(room, since \\ 0) do
-    case GenServer.call(__MODULE__, {:subscribe, room, self, since}) do
+  def get_redis(pid), do: GenServer.call(pid, :get_redis)
+
+  def subscribe(pid, room, since \\ 0) do
+    case GenServer.call(pid, {:subscribe, room, self, since}) do
       {:error, _} = err -> err
       {:ok, mref} ->
-        bref = Process.monitor(__MODULE__)
-        {:ok, {room, bref, mref}}
+        bref = Process.monitor(pid)
+        {:ok, {room, bref, mref, pid}}
     end
   end
 
-  def unsubscribe({room, bref, mref}) do
-    GenServer.call(__MODULE__, {:unsubscribe, room, self, mref})
+  def unsubscribe({room, bref, mref, pid}) do
+    GenServer.call(pid, {:unsubscribe, room, self, mref})
     Process.demonitor(bref, [:flush])
     :ok
   end
 
-  def init([]) do
+  def init(_opts) do
     subscriptions    = :ets.new(:broker_subscriptions, [:bag])
     subscribers      = :ets.new(:broker_subscribers, [:bag])
     observed         = :ets.new(:broker_observed, [])
     redis_client     = Redis.start_client
     redis_sub_client = Redis.start_subscription_client(self)
-    Process.register(redis_client, :broker_redis_client)
     {:ok, %State{subscribers: subscribers,
                  subscriptions: subscriptions,
                  observed: observed,
@@ -127,8 +51,11 @@ defmodule DatingRoom.Broker do
                  }}
   end
 
+  def handle_call(:get_redis, _from, state),
+   do: {:reply, state.redis_client, state}
+
   def handle_call({:subscribe, room, pid, since}, _from, state) do
-    case rejoin(room, since, pid) do
+    case rejoin(room, since, pid, state) do
         {:error, _} = err -> {:reply, err, state}
         {:ok, last_sent_id} ->
             mref = Process.monitor(pid)
@@ -141,7 +68,8 @@ defmodule DatingRoom.Broker do
 
   def handle_call({:unsubscribe, room, pid, mref}, _from, state) do
     true = Process.demonitor(mref)
-    :ok = :ets.delete_object(state.subscribers, {pid, room})
+    true = :ets.delete_object(state.subscribers, {pid, room})
+    true = :ets.delete_object(state.subscriptions, {room, pid})
     {:reply, :ok, state}
   end
 
@@ -180,9 +108,9 @@ defmodule DatingRoom.Broker do
       end
   end
 
-  defp rejoin(_room, since, _pid) when since == 0, do: {:ok, 0}
-  defp rejoin(room, since, pid) do
-    missed = Process.whereis(:broker_redis_client)
+  defp rejoin(_room, since, _pid, _state) when since == 0, do: {:ok, 0}
+  defp rejoin(room, since, pid, state) do
+    missed = state.redis_client
     |> Redis.raw_history(room, since)
     |> Enum.map(&(Message.from_redis!(&1, room)))
 

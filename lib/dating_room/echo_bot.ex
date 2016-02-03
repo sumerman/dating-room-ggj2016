@@ -1,8 +1,6 @@
 defmodule DatingRoom.EchoBot do
   use GenServer
 
-  alias DatingRoom.Broker
-
   def start_link(user_id, room),
    do: GenServer.start_link(__MODULE__, [user_id: user_id, room: room], [])
 

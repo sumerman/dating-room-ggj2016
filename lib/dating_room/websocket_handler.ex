@@ -1,9 +1,8 @@
 defmodule DatingRoom.WebsocketHandler do
   @behaviour :cowboy_websocket_handler
 
-  alias DatingRoom.Broker
   alias DatingRoom.Matchmaker
-  alias DatingRoom.Broker.Message
+  alias Broker.Message
 
   defmodule State do
     defstruct frametype: :binary, user_id: "", room: "", subscription: nil,
