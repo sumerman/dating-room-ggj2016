@@ -52,17 +52,6 @@ defmodule DatingRoom.WebsocketHandler do
 
   defp handle_message(%{"type" => "ping"}, state),
    do: {:reply, %{type: "pong"}, state}
-  defp handle_message(%{"type" => "start_bot", "user_id" => user_id}, state) do
-    Matchmaker.leave
-    if is_pid(state.pid) do
-      Process.unlink(state.pid)
-      Process.exit(state.pid, :kill)
-    end
-    room = :erlang.phash2({user_id, System.monotonic_time}) |> Integer.to_string
-    {:ok, state} = join(room, user_id, 0, %{state | waiting_for_match: false})
-    {:ok, bot_pid} = DatingRoom.EchoBot.start_link(user_id <> "_bot", room)
-    {:ok, %{state | bot: bot_pid}}
-  end
   defp handle_message(%{"type" => "stop_match"}, state) do
     Matchmaker.leave
     {:ok, %{state | waiting_for_match: false}}
