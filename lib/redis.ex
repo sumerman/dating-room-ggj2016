@@ -55,7 +55,7 @@ defmodule Redis do
   defp counter_name(room), do: "room{#{room}}counter"
 
   # TODO make it configurable
-  defp hist_length, do: 100
+  def hist_length, do: 100
   defp hist_expire, do: 1800
   def  redis_uri, do: Application.get_env(:dating_room, :redis_uri, "")
 

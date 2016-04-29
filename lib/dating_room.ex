@@ -17,7 +17,7 @@ defmodule DatingRoom do
     [
       {"/", RedirectHandler, {:path, "./game/index.html"}},
       {"/game/[...]", :cowboy_static, {:priv_dir,  :dating_room, "game"}},
-      {"/websocket", DatingRoom.WebsocketHandler, []},
+      {"/ws", DatingRoom.WebsocketHandler, []},
       {"/status", DatingRoom.DebugHandler, []}
     ]
   end
