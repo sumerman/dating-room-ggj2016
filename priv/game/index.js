@@ -73,8 +73,8 @@ $(document).ready(function() {
 	var ws_endpoint = "ws://"+window.location.hostname+":"+window.location.port+"/ws?user_id="+userid;
 	if ("WebSocket" in window) {
 		ws = new WebSocket(ws_endpoint);
+		// init phase 1
 		ws.onopen = function() {
-			// TODO on disconnect message
 			send_ws({type: 'declare_hub', hub: hub, default_streams: [stream]});
 			send_ws({type: 'send_on_leave', hub: hub, stream: stream, payload: null })
 		};
@@ -83,6 +83,7 @@ $(document).ready(function() {
 			try {
 				var update = JSON.parse(received_msg);
 				console.log(update);
+				// recovery from a snapshot
 				if (update['type'] == 'stream_joined' && update['hub'] == hub) {
 					last_seen = update['last_seen']
 					players_st = (update['stash'] || {})['players']
@@ -98,6 +99,7 @@ $(document).ready(function() {
 					}
 					send_ws({type: 'send', hub: hub, stream: stream, payload: {x: player.x, y: player.y}})
 				}
+				// apply update
 				if (update['type'] == 'update' && update['hub'] == hub) {
 					last_seen = update['id'];
 					var player_i = update['user_id'];
@@ -108,10 +110,13 @@ $(document).ready(function() {
 						if(update['payload'] === null) { removePlayer(player_i); }
 						else { players[player_i].set(update['payload']); }
 					}
+					// and send a snapshot
 					var stash = {players: players};
 					send_ws({type: 'snapshot', hub: hub, stream: stream, last_seen: last_seen, stash: stash});
 				}
+				// init phase 2 (happens only when player connects for the first time)
 				if (update['type'] == 'initialized' && last_seen == null) {
+					// will trigger a reload (server closes current connection)
 					send_ws({type: 'switch_hubs', join_hubs: [hub]});
 				}
 			}
@@ -137,6 +142,7 @@ $(document).ready(function() {
 		if (e.which === 38) upd = {y:-d};
 		if (e.which === 40) upd = {y: d};
 		if (upd) {
+			// apply local updates immidiately
 			player.updPos(upd)
 			send_ws({type: 'send', hub: hub, stream: stream, payload: {x: player.x, y: player.y} })
 		}
