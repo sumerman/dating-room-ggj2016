@@ -4,7 +4,7 @@ defmodule DatingRoom.WebsocketHandler do
   alias Broker.Message
 
   defmodule State do
-    defstruct frametype: :text, user_id: "", timer: nil
+    defstruct frametype: :text, user_id: "", timer: nil, on_disconnect: []
   end
 
   def init({_tcp, _http}, _req, _opts),
@@ -20,10 +20,12 @@ defmodule DatingRoom.WebsocketHandler do
           send self, {:stream_joined, join_info}
           {:ok, _sub} = Nexus.Hub.Stream.join(hub_id, stream_id, stash.seq_n)
     end
+    send self, {:initialized, user_id}
     {:ok, req, reset_timer(%State{user_id: user_id})}
   end
 
-  def websocket_terminate(_reason, _req, _state), do: :ok
+  def websocket_terminate(_reason, _req, state),
+   do: Enum.each(state.on_disconnect, fn f -> f.() end); :ok
 
   def websocket_handle({type, content}, req, state) do
     state = %{state | frametype: type}
@@ -35,6 +37,8 @@ defmodule DatingRoom.WebsocketHandler do
     reply = Map.merge(join_info, %{type: "stream_joined"})
     {:reply, reply, state} |> encode_response(req)
   end
+  def websocket_info({:initialized, _user_id}, req, state),
+   do: {:reply, %{type: "initialized"}, state} |> encode_response(req)
   def websocket_info(%Message{payload: bin}, req, state),
    do: {:reply, {state.frametype, bin}, req, reset_timer(state)}
   # idle
@@ -57,16 +61,19 @@ defmodule DatingRoom.WebsocketHandler do
     {:shutdown, state}
   end
   defp handle_message(%{"type" => "send", "hub" => h, "stream" => s, "payload" => payload}, state) do
-    {:ok, id} = send_to! h, s, %{type: "update", payload: payload, user_id: state.user_id}
-    {:reply, %{type: "sent", id: id}, state}
+    {:ok, _id} = send_to! h, s, %{type: "update", payload: payload, user_id: state.user_id}
+    {:ok, state}
+  end
+  defp handle_message(%{"type" => "send_on_leave", "hub" => h, "stream" => s, "payload" => payload}, state) do
+    fun = fn -> send_to! h, s, %{type: "update", payload: payload, user_id: state.user_id} end
+    {:ok, %{state | on_disconnect: [fun | state.on_disconnect]}}
   end
   defp handle_message(%{"type" => "snapshot", "hub" => h, "stream" => s, "last_seen" => ls} = msg, state) when is_integer(ls) do
     stash_value = Map.get(msg, "stash", %{})
     stash_key = %Nexus.User.StashKey{user_id: state.user_id, hub_id: h, stream_id: s}
     :ok = %Nexus.User.StashRecord{stash_key: stash_key, seq_n: ls, value: stash_value}
           |> Nexus.User.set_stash
-    reply = Map.put(msg, :type, "snapshot_saved")
-    {:reply, reply, state}
+    {:ok, state}
   end
   defp handle_message(msg, state),
    do: {:reply, %{type: "error", reason: "uknown msg", payload: msg}, state}

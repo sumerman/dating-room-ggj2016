@@ -1,0 +1,32 @@
+body {
+	margin: 0;
+}
+
+#login {
+	width:270px;
+	padding:10px;
+	height:110px;
+	position:absolute;
+	margin-top:-55px;
+	margin-left:-150px;
+	top:50%;
+	left:50%;
+	border: solid;
+}
+
+.player {
+	margin: 0;
+	padding: 10px;
+	position: absolute;
+	top: 0px;
+	left: 0px;
+	width: 40px;
+	height: 40px;
+	/*background: url("../img/pig1.png") no-repeat center center scroll;*/
+	border: solid;
+	border-radius: 100%;
+	-webkit-background-size: contain; /* For WebKit*/
+	-moz-background-size: contain;    /* Mozilla*/
+	-o-background-size: contain;      /* Opera*/
+	background-size: contain;
+}
