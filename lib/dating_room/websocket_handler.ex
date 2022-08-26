@@ -122,7 +122,7 @@ defmodule DatingRoom.WebsocketHandler do
   # idle room timer
   defp reset_timer(state) do
     if state.timer, do: Process.cancel_timer(state.timer)
-    timer = Process.send_after(self, :idle_timeout, 60_000)
+    timer = Process.send_after(self(), :idle_timeout, 60_000)
     %{state | timer: timer}
   end
 

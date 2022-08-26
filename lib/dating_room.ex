@@ -1,11 +1,11 @@
 defmodule DatingRoom do
   def start(_type, _args) do
-    dispatch = :cowboy_router.compile([{:_, routes}])
-    {:ok, _} = :cowboy.start_http(:http, 100, [port: port], [env: [dispatch: dispatch]])
-    DatingRoom.Supervisor.start_link
+    dispatch = :cowboy_router.compile([{:_, routes()}])
+    {:ok, _} = :cowboy.start_http(:http, 100, [port: port()], [env: [dispatch: dispatch]])
+    DatingRoom.Supervisor.start_link()
   end
 
-  def port do
+  def port() do
     port = Application.get_env(:dating_room, :http_port)
     case port do
       int when is_integer(int) -> port
@@ -13,7 +13,7 @@ defmodule DatingRoom do
     end
   end
 
-  def routes do
+  def routes() do
     [
       # {"/static/[...]", :cowboy_static, {:priv_dir,  :cowboy_elixir_example, "static_files"}},
       {"/", RedirectHandler, {:path, "./game/index.html"}},

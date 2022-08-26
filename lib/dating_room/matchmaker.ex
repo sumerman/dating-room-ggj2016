@@ -9,10 +9,10 @@ defmodule DatingRoom.Matchmaker do
   def start_link(opts \\ []),
    do: GenServer.start_link(__MODULE__, [], [name: __MODULE__] ++ opts)
 
-  def join(), do: GenServer.call(__MODULE__, {:join, self})
+  def join(), do: GenServer.call(__MODULE__, {:join, self()})
   def leave() do
-    GenServer.call(__MODULE__, {:leave, self})
-    flush_matches
+    GenServer.call(__MODULE__, {:leave, self()})
+    flush_matches()
   end
   def queue_length(), do: GenServer.call(__MODULE__, :queue_length)
 
@@ -46,7 +46,7 @@ defmodule DatingRoom.Matchmaker do
 
   defp flush_matches() do
     receive do
-      %Match{} -> flush_matches
+      %Match{} -> flush_matches()
     after 0 -> :ok
     end
   end

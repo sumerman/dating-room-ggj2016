@@ -7,7 +7,7 @@ defmodule DatingRoom.EchoBot do
   def init(args) do
     room = Keyword.get(args, :room)
     user_id = Keyword.get(args, :user_id)
-    GenServer.cast(self, {:join, room, user_id})
+    GenServer.cast(self(), {:join, room, user_id})
     {:ok, %{}}
   end
 

@@ -9,7 +9,7 @@ defmodule DatingRoom.DebugHandler do
       # headers
       [ {"content-type", "application/json"} ],
       # body of reply.
-      Poison.encode!(status) <> "\n",
+      Poison.encode!(status()) <> "\n",
       # original request
       request
     )
@@ -21,7 +21,7 @@ defmodule DatingRoom.DebugHandler do
 
   alias DatingRoom.Matchmaker
 
-  defp status do
+  defp status() do
     %{
       matchmaker_queue_size: Matchmaker.queue_length
     }

@@ -23,7 +23,7 @@ defmodule Broker.Server do
   def get_redis(pid), do: GenServer.call(pid, :get_redis)
 
   def subscribe(pid, room, since \\ 0) do
-    case GenServer.call(pid, {:subscribe, room, self, since}) do
+    case GenServer.call(pid, {:subscribe, room, self(), since}) do
       {:error, _} = err -> err
       {:ok, mref} ->
         bref = Process.monitor(pid)
@@ -32,7 +32,7 @@ defmodule Broker.Server do
   end
 
   def unsubscribe({room, bref, mref, pid}) do
-    GenServer.call(pid, {:unsubscribe, room, self, mref})
+    GenServer.call(pid, {:unsubscribe, room, self(), mref})
     Process.demonitor(bref, [:flush])
     :ok
   end
@@ -42,7 +42,7 @@ defmodule Broker.Server do
     subscribers      = :ets.new(:broker_subscribers, [:bag])
     observed         = :ets.new(:broker_observed, [])
     redis_client     = Redis.start_client
-    redis_sub_client = Redis.start_subscription_client(self)
+    redis_sub_client = Redis.start_subscription_client(self())
     {:ok, %State{subscribers: subscribers,
                  subscriptions: subscriptions,
                  observed: observed,

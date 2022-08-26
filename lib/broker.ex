@@ -22,7 +22,7 @@ defmodule Broker do
     end
   end
 
-  def start_link() do
+  def start_link(_) do
     case Broker.Server.start_link(name: __MODULE__) do
       {:error, _} = err -> err
       {:ok, pid} ->
@@ -32,6 +32,8 @@ defmodule Broker do
         {:ok, pid}
     end
   end
+
+  def init([]), do: {:ok, []}
 
   def send_to!(room, f) do
     redis = Process.whereis(:broker_redis_client)
