@@ -41,7 +41,7 @@ defmodule Broker do
   end
 
   # TODO backpressure — subscribe for N messages and/or ack
-  def subscribe(room, since \\ 0), do: Broker.Server.subscribe(__MODULE__, room, since)
+  def subscribe(room, since \\ 0) when since >= 0, do: Broker.Server.subscribe(__MODULE__, room, since)
 
   def unsubscribe(ref), do: Broker.Server.unsubscribe(ref)
 

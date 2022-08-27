@@ -41,7 +41,7 @@ defmodule DatingRoom.WebsocketHandler do
     end
   end
   def websocket_info(%Matchmaker.Match{room_id: room}, req, state),
-   do: join(room, state.user_id, -2, %{state | waiting_for_match: false}) |> encode_response(req)
+   do: join(room, state.user_id, 0, %{state | waiting_for_match: false}) |> encode_response(req)
   # idle
   def websocket_info(:idle_timeout, req, state),
    do: {:shutdown, req, state}

@@ -42,7 +42,7 @@ defmodule Broker.Server do
     subscribers      = :ets.new(:broker_subscribers, [:bag])
     observed         = :ets.new(:broker_observed, [])
     redis_client     = Redis.start_client()
-    redis_sub_client = Redis.start_subscription_client(self())
+    redis_sub_client = Redis.start_subscription_client_and_subscribe()
     {:ok, %State{subscribers: subscribers,
                  subscriptions: subscriptions,
                  observed: observed,
@@ -73,60 +73,117 @@ defmodule Broker.Server do
     {:reply, :ok, state}
   end
 
-  def handle_info({:subscribed, "room*", _pid}, state), do: {:noreply, state}
-  def handle_info({:pmessage, "room*", psub_room_name, data, _pid}, state) do
+  def handle_info({:subscribed, "room*", pid}, state)
+  when pid == state.redis_sub_client do
+    for {room, last_id} <- :ets.tab2list(state.observed) do
+        # ping the room as a way to guarantee the non-empty
+        # history when reading. Empty history means that
+        # we are up to date, but the replica we are reading from
+        # might be not!
+        {:ok, expecting_id} = send_to!(state.redis_client, room, fn _ -> "" end)
+        bcast_room_data_starting_after(state, room, last_id, expecting_id)
+    end
+    Redis.ack_message(state.redis_sub_client)
+    {:noreply, state}
+  end
+  def handle_info({:pmessage, "room*", psub_room_name, data, pid}, state)
+  when pid == state.redis_sub_client do
     room = Redis.name_from_psub(psub_room_name)
     msg_id = String.to_integer(data)
     if :ets.member(state.observed, room) do
       last_id = :ets.lookup_element(state.observed, room, 2)
       if last_id < msg_id and last_id >= 0 do
-        last_id = state.redis_client
-        |> Redis.raw_history(room, last_id + 1)
-        |> Enum.map(&(Message.from_redis!(&1, room)))
-        |> Enum.reduce(last_id, fn msg, _ -> send_to_subscribers(room, msg, state); msg.id end)
-
-        :ets.insert(state.observed, {room, last_id})
+        bcast_room_data_starting_after(state, room, last_id, msg_id)
       end
     end
+    Redis.ack_message(state.redis_sub_client)
     {:noreply, state}
   end
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
     for {pid, room} <- :ets.lookup(state.subscribers, pid) do
-      :ets.delete(state.subscribers,   {pid, room})
-      :ets.delete(state.subscriptions, {room, pid})
+      :ets.delete_object(state.subscribers,   {pid, room})
+      :ets.delete_object(state.subscriptions, {room, pid})
     end
     {:noreply, state}
   end
-  def handle_info({:eredis_disconnected, _pid}, state) do
-    Logger.warn "disconnected from redis :("
-    {:stop, :disconnected, state}
+  def handle_info({:eredis_disconnected, pid}, state)
+  when pid == state.redis_sub_client do
+    # We configure subscription client to exit on disconnect
+    Logger.warn "Re-establishing connection to redis.."
+    redis_sub_client = Redis.start_subscription_client_and_subscribe()
+    {:noreply, %State{state | redis_sub_client: redis_sub_client}}
   end
   def handle_info(info, state) do
     Logger.warn "uknown info #{inspect info}"
     {:noreply, state}
   end
 
+  defp bcast_room_data_starting_after(state, room, after_id, expecting_id) do
+    if :ets.member(state.subscriptions, room) do
+      last_id = state.redis_client
+                |> reliable_history(room, after_id + 1, expecting_id)
+                |> Enum.reduce(after_id, fn msg, _ -> send_to_subscribers(room, msg, state); msg.id end)
+
+      :ets.insert(state.observed, {room, last_id})
+      last_id > after_id
+    else
+      true
+    end
+  end
+
   defp send_to_subscribers(room, msg, state) do
       Enum.each :ets.lookup(state.subscriptions, room), fn {_room, pid} ->
-          send(pid, msg)
+          send_non_empty(pid, msg)
       end
   end
 
-  defp rejoin(_room, since, _pid, _state) when since == 0, do: {:ok, 0}
   defp rejoin(room, since, pid, state) do
-    missed = state.redis_client
-    |> Redis.raw_history(room, since)
-    |> Enum.map(&(Message.from_redis!(&1, room)))
+    # same reason as in {:subscribe, ..} handler
+    {:ok, expecting_id} = send_to!(state.redis_client, room, fn _ -> "" end)
+    missed = reliable_history(state.redis_client, room, since, expecting_id)
+
+    # If we didn't receive :pmessage yet, we shouldn't
+    # expose very new messages to just one client
+    missed =
+      case :ets.lookup(state.observed, room) do
+        [] -> missed
+        [{_, last_observed}] ->
+              Enum.take_while(missed, &(&1.id <= last_observed))
+      end
 
     case missed do
       [%Message{id: id} | _] when id != since and since > 0 ->
         {:error, :missed_to_much}
       all ->
         last_sent_id = all
-        |> Enum.drop_while(&(&1.id <= since))
-        |> Enum.reduce(0, fn msg, _id -> send(pid, msg).id end)
+                       |> Enum.drop_while(&(&1.id <= since))
+                       |> Enum.reduce(0, fn msg, _id -> send_non_empty(pid, msg).id end)
         {:ok, last_sent_id}
     end
   end
 
+  defp reliable_history(client, room, since, including, retries \\ 5) do
+    # Increases the chances of reading what we expect the first time around
+    # when dealing with Upstash as a Redis standin.
+    # The caller may need to retry a few times even with this delay
+    Process.sleep(expected_repica_delay())
+    hist = client
+           |> Redis.raw_history(room, since)
+           |> Enum.map(&(Message.from_redis!(&1, room)))
+    should_retry = Enum.all?(hist, fn %Message{id: id} -> id < including end)
+    cond do
+      retries <= 0 ->
+        exit(:fatal_redis_lag)
+      should_retry && retries > 0 ->
+        Logger.warn("Broker retries room history retrieval. Attempts left: #{retries - 1}")
+        reliable_history(client, room, since, including, retries - 1)
+      true ->
+        hist
+    end
+  end
+
+  defp expected_repica_delay(), do: 10
+
+  defp send_non_empty(_pid, %Message{payload: <<>>} = msg), do: msg
+  defp send_non_empty(pid, %Message{} = msg), do: send(pid, msg)
 end

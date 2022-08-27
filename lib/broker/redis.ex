@@ -39,16 +39,17 @@ defmodule Redis do
   do: zrangebyscore(client, oset_name(room), since, "+inf")
 
   def start_client(),
-   do: Exredis.start_using_connection_string(redis_uri())
+   do: Exredis.start_using_connection_string(redis_uri(), reconnect_sleep())
 
-  def start_subscription_client(pid) do
+  def start_subscription_client_and_subscribe() do
     # TODO start with :exit PB behaviour
-    client_sub = Exredis.Sub.start_using_connection_string(redis_uri())
-    Exredis.Sub.psubscribe client_sub, "room*", fn(msg) ->
-      # TODO backpressure
-      send(pid, msg)
-    end
+    client_sub = Exredis.Sub.start_using_connection_string(redis_uri(), :no_reconnect, hist_length(), :drop)
+    :eredis_sub.controlling_process(client_sub)
+    :eredis_sub.psubscribe(client_sub, List.wrap("room*"))
+    client_sub
   end
+
+  def ack_message(client) when is_pid(client), do: :eredis_sub.ack_message(client)
 
   def  psub_name(room), do: "room{#{room}}"
   defp oset_name(room), do: "room{#{room}}oset"
@@ -57,6 +58,7 @@ defmodule Redis do
   # TODO make it configurable
   defp hist_length(), do: 100
   defp hist_expire(), do: 1800
+  defp reconnect_sleep(), do: 500
   def  redis_uri(), do: Application.get_env(:dating_room, :redis_uri, "")
 
   def  name_from_psub("room{" <> room_suffix), do: String.trim_trailing(room_suffix, "}")
