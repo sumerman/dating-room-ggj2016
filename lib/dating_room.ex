@@ -15,7 +15,6 @@ defmodule DatingRoom do
 
   def routes() do
     [
-      # {"/static/[...]", :cowboy_static, {:priv_dir,  :cowboy_elixir_example, "static_files"}},
       {"/", RedirectHandler, {:path, "./game/index.html"}},
       {"/game/[...]", :cowboy_static, {:priv_dir,  :dating_room, "game/TDG_Alpha"}},
       {"/websocket", DatingRoom.WebsocketHandler, []},

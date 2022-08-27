@@ -41,7 +41,7 @@ defmodule Broker.Server do
     subscriptions    = :ets.new(:broker_subscriptions, [:bag])
     subscribers      = :ets.new(:broker_subscribers, [:bag])
     observed         = :ets.new(:broker_observed, [])
-    redis_client     = Redis.start_client
+    redis_client     = Redis.start_client()
     redis_sub_client = Redis.start_subscription_client(self())
     {:ok, %State{subscribers: subscribers,
                  subscriptions: subscriptions,
@@ -96,6 +96,10 @@ defmodule Broker.Server do
       :ets.delete(state.subscriptions, {room, pid})
     end
     {:noreply, state}
+  end
+  def handle_info({:eredis_disconnected, _pid}, state) do
+    Logger.warn "disconnected from redis :("
+    {:stop, :disconnected, state}
   end
   def handle_info(info, state) do
     Logger.warn "uknown info #{inspect info}"
