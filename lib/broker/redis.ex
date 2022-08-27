@@ -34,12 +34,15 @@ defmodule Redis do
 
   def raw_history(client, room, since \\ 0)
   def raw_history(client, room, since) when since < 0,
-  do: zrange(client, oset_name(room), since, -1)
+   do: zrange(client, oset_name(room), since, -1)
   def raw_history(client, room, since) when since >= 0,
-  do: zrangebyscore(client, oset_name(room), since, "+inf")
+   do: zrangebyscore(client, oset_name(room), since, "+inf")
 
   def start_client(),
    do: Exredis.start_using_connection_string(redis_uri(), reconnect_sleep())
+
+  def stop_client(client),
+   do: Exredis.stop(client)
 
   def start_subscription_client_and_subscribe() do
     # TODO start with :exit PB behaviour
@@ -48,6 +51,9 @@ defmodule Redis do
     :eredis_sub.psubscribe(client_sub, List.wrap("room*"))
     client_sub
   end
+
+  def stop_subscription_client(client),
+   do: Exredis.Sub.stop(client)
 
   def ack_message(client) when is_pid(client), do: :eredis_sub.ack_message(client)
 

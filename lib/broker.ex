@@ -36,7 +36,17 @@ defmodule Broker do
   def init([]), do: {:ok, []}
 
   def send_to!(room, f) do
-    redis = Process.whereis(:broker_redis_client)
+    redis = case Process.whereis(:broker_redis_client) do
+      pid when is_pid(pid) -> pid
+      _ ->
+        pid = Broker.Server.get_redis(__MODULE__)
+        try do
+          Process.register(pid, :broker_redis_client)
+        rescue
+          ArgumentError -> :ok
+        end
+        pid
+    end
     Broker.Server.send_to!(redis, room, f)
   end
 

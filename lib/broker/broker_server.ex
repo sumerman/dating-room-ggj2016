@@ -38,23 +38,23 @@ defmodule Broker.Server do
   end
 
   def init(_opts) do
-    subscriptions    = :ets.new(:broker_subscriptions, [:bag])
-    subscribers      = :ets.new(:broker_subscribers, [:bag])
-    observed         = :ets.new(:broker_observed, [])
-    redis_client     = Redis.start_client()
-    redis_sub_client = Redis.start_subscription_client_and_subscribe()
-    {:ok, %State{subscribers: subscribers,
-                 subscriptions: subscriptions,
-                 observed: observed,
-                 redis_client: redis_client,
-                 redis_sub_client: redis_sub_client
-                 }}
+    subscriptions = :ets.new(:broker_subscriptions, [:bag])
+    subscribers   = :ets.new(:broker_subscribers, [:bag])
+    observed      = :ets.new(:broker_observed, [])
+    state         = %State{subscribers: subscribers,
+                           subscriptions: subscriptions,
+                           observed: observed,
+                          }
+    {:ok, ensure_redis(state)}
   end
 
-  def handle_call(:get_redis, _from, state),
-   do: {:reply, state.redis_client, state}
+  def handle_call(:get_redis, _from, state) do
+    state = ensure_redis(state)
+    {:reply, state.redis_client, state}
+  end
 
   def handle_call({:subscribe, room, pid, since}, _from, state) do
+    state = ensure_redis(state)
     case rejoin(room, since, pid, state) do
         {:error, _} = err -> {:reply, err, state}
         {:ok, last_sent_id} ->
@@ -70,7 +70,7 @@ defmodule Broker.Server do
     true = Process.demonitor(mref)
     true = :ets.delete_object(state.subscribers, {pid, room})
     true = :ets.delete_object(state.subscriptions, {room, pid})
-    {:reply, :ok, state}
+    {:reply, :ok, maybe_shutdown_redis(state)}
   end
 
   def handle_info({:subscribed, "room*", pid}, state)
@@ -104,18 +104,23 @@ defmodule Broker.Server do
       :ets.delete_object(state.subscribers,   {pid, room})
       :ets.delete_object(state.subscriptions, {room, pid})
     end
-    {:noreply, state}
+    {:noreply, maybe_shutdown_redis(state)}
   end
   def handle_info({:eredis_disconnected, pid}, state)
   when pid == state.redis_sub_client do
-    # We configure subscription client to exit on disconnect
-    Logger.warn "Re-establishing connection to redis.."
-    redis_sub_client = Redis.start_subscription_client_and_subscribe()
-    {:noreply, %State{state | redis_sub_client: redis_sub_client}}
+    state = maybe_shutdown_redis(state)
+    if state.redis_sub_client != nil do
+      # We configure subscription client to exit on disconnect
+      Logger.warn "Re-establishing connection to redis.."
+      redis_sub_client = Redis.start_subscription_client_and_subscribe()
+      {:noreply, %State{state | redis_sub_client: redis_sub_client}}
+    else
+      {:noreply, state}
+    end
   end
   def handle_info(info, state) do
     Logger.warn "uknown info #{inspect info}"
-    {:noreply, state}
+    {:noreply, maybe_shutdown_redis(state)}
   end
 
   defp bcast_room_data_starting_after(state, room, after_id, expecting_id) do
@@ -186,4 +191,30 @@ defmodule Broker.Server do
 
   defp send_non_empty(_pid, %Message{payload: <<>>} = msg), do: msg
   defp send_non_empty(pid, %Message{} = msg), do: send(pid, msg)
+
+  defp ensure_redis(%State{ redis_client: nil, redis_sub_client: nil } = state) do
+    Logger.info "Broker creates Redis connection..."
+    %State{state |
+           redis_client: Redis.start_client(),
+           redis_sub_client: Redis.start_subscription_client_and_subscribe()
+          }
+  end
+  defp ensure_redis(state), do: state
+
+  defp maybe_shutdown_redis(%State{} = state) do
+    if :ets.first(state.subscribers) == :"$end_of_table" do
+      Logger.info "Broker terminated Redis connection due to inactivity..."
+      if state.redis_client != nil && Process.alive?(state.redis_client) do
+        Redis.stop_client(state.redis_client)
+      end
+      if state.redis_sub_client != nil && Process.alive?(state.redis_sub_client) do
+        Redis.stop_subscription_client(state.redis_sub_client)
+      end
+      :ets.delete_all_objects(state.observed)
+      %State{state | redis_client: nil, redis_sub_client: nil}
+    else
+      state
+    end
+  end
+
 end
